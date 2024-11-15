@@ -616,3 +616,7 @@ philly_map |>
   ) |>
   add_navigation_control()
 ```
+
+### Workshop slides
+
+{{< revealjs file="docs/slides.html" height="500px" class="ratio ratio-16x9" >}}
