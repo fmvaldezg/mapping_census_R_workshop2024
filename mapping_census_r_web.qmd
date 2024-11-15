@@ -617,6 +617,6 @@ philly_map |>
   add_navigation_control()
 ```
 
-### Workshop slides
+## [Workshop slides](https://fmvaldezg.quarto.pub/mapping-census-data-in-r)
 
-{{< revealjs file="docs/slides.html" height="500px" class="ratio ratio-16x9" >}}
+<iframe width="780" height="500" marginheight="0" marginwidth="0" src="https://fmvaldezg.quarto.pub/mapping-census-data-in-r/#/title-slide"></iframe>
