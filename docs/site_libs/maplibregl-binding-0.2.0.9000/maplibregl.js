@@ -1,3 +1,28 @@
+function onMouseMoveTooltip(e, map, tooltipPopup, tooltipProperty) {
+    map.getCanvas().style.cursor = "pointer";
+    if (e.features.length > 0) {
+        const description = e.features[0].properties[tooltipProperty];
+        tooltipPopup.setLngLat(e.lngLat).setHTML(description).addTo(map);
+
+        // Store reference to currently active tooltip
+        window._activeTooltip = tooltipPopup;
+    } else {
+        tooltipPopup.remove();
+        // If this was the active tooltip, clear the reference
+        if (window._activeTooltip === tooltipPopup) {
+            delete window._activeTooltip;
+        }
+    }
+}
+
+function onMouseLeaveTooltip(map, tooltipPopup) {
+    map.getCanvas().style.cursor = "";
+    tooltipPopup.remove();
+    if (window._activeTooltip === tooltipPopup) {
+        delete window._activeTooltip;
+    }
+}
+
 HTMLWidgets.widget({
     name: "maplibregl",
 
@@ -12,6 +37,9 @@ HTMLWidgets.widget({
                     console.error("Maplibre GL JS is not loaded.");
                     return;
                 }
+
+                let protocol = new pmtiles.Protocol({ metadata: true });
+                maplibregl.addProtocol("pmtiles", protocol.tile);
 
                 map = new maplibregl.Map({
                     container: el.id,
@@ -206,155 +234,132 @@ HTMLWidgets.widget({
                         });
                     }
 
-                    // Add layers if provided
-                    if (x.layers) {
-                        x.layers.forEach(function (layer) {
-                            try {
-                                const layerConfig = {
-                                    id: layer.id,
-                                    type: layer.type,
-                                    source: layer.source,
-                                    layout: layer.layout || {},
-                                    paint: layer.paint || {},
+                    function add_my_layers(layer) {
+                        try {
+                            const layerConfig = {
+                                id: layer.id,
+                                type: layer.type,
+                                source: layer.source,
+                                layout: layer.layout || {},
+                                paint: layer.paint || {},
+                            };
+
+                            // Check if source is an object and set generateId if source type is 'geojson'
+                            if (
+                                typeof layer.source === "object" &&
+                                layer.source.type === "geojson"
+                            ) {
+                                layerConfig.source.generateId = true;
+                            } else if (typeof layer.source === "string") {
+                                // Handle string source if needed
+                                layerConfig.source = layer.source;
+                            }
+
+                            if (layer.source_layer) {
+                                layerConfig["source-layer"] =
+                                    layer.source_layer;
+                            }
+
+                            if (layer.slot) {
+                                layerConfig["slot"] = layer.slot;
+                            }
+
+                            if (layer.minzoom) {
+                                layerConfig["minzoom"] = layer.minzoom;
+                            }
+
+                            if (layer.maxzoom) {
+                                layerConfig["maxzoom"] = layer.maxzoom;
+                            }
+
+                            if (layer.filter) {
+                                layerConfig["filter"] = layer.filter;
+                            }
+
+                            if (layer.before_id) {
+                                map.addLayer(layerConfig, layer.before_id);
+                            } else {
+                                map.addLayer(layerConfig);
+                            }
+
+                            // Add popups or tooltips if provided
+                            if (layer.popup) {
+                                map.on("click", layer.id, function (e) {
+                                    const description =
+                                        e.features[0].properties[layer.popup];
+
+                                    new maplibregl.Popup()
+                                        .setLngLat(e.lngLat)
+                                        .setHTML(description)
+                                        .addTo(map);
+                                });
+
+                                // Change cursor to pointer when hovering over the layer
+                                map.on("mouseenter", layer.id, function () {
+                                    map.getCanvas().style.cursor = "pointer";
+                                });
+
+                                // Change cursor back to default when leaving the layer
+                                map.on("mouseleave", layer.id, function () {
+                                    map.getCanvas().style.cursor = "";
+                                });
+                            }
+
+                            if (layer.tooltip) {
+                                const tooltip = new maplibregl.Popup({
+                                    closeButton: false,
+                                    closeOnClick: false,
+                                });
+
+                                // Create a reference to the mousemove handler function.
+                                // We need to pass 'e', 'map', 'tooltip', and 'layer.tooltip' to onMouseMoveTooltip.
+                                const mouseMoveHandler = function (e) {
+                                    onMouseMoveTooltip(
+                                        e,
+                                        map,
+                                        tooltip,
+                                        layer.tooltip,
+                                    );
                                 };
 
-                                // Check if source is an object and set generateId if source type is 'geojson'
-                                if (
-                                    typeof layer.source === "object" &&
-                                    layer.source.type === "geojson"
-                                ) {
-                                    layerConfig.source.generateId = true;
-                                } else if (typeof layer.source === "string") {
-                                    // Handle string source if needed
-                                    layerConfig.source = layer.source;
+                                // Create a reference to the mouseleave handler function.
+                                // We need to pass 'map' and 'tooltip' to onMouseLeaveTooltip.
+                                const mouseLeaveHandler = function () {
+                                    onMouseLeaveTooltip(map, tooltip);
+                                };
+
+                                // Attach the named handler references, not anonymous functions.
+                                map.on("mousemove", layer.id, mouseMoveHandler);
+                                map.on(
+                                    "mouseleave",
+                                    layer.id,
+                                    mouseLeaveHandler,
+                                );
+
+                                // Store these handler references so you can remove them later if needed
+                                if (!window._mapboxHandlers) {
+                                    window._mapboxHandlers = {};
+                                }
+                                window._mapboxHandlers[layer.id] = {
+                                    mousemove: mouseMoveHandler,
+                                    mouseleave: mouseLeaveHandler,
+                                };
+                            }
+
+                            // Add hover effect if provided
+                            if (layer.hover_options) {
+                                const jsHoverOptions = {};
+                                for (const [key, value] of Object.entries(
+                                    layer.hover_options,
+                                )) {
+                                    const jsKey = key.replace(/_/g, "-");
+                                    jsHoverOptions[jsKey] = value;
                                 }
 
-                                if (layer.source_layer) {
-                                    layerConfig["source-layer"] =
-                                        layer.source_layer;
-                                }
+                                let hoveredFeatureId = null;
 
-                                if (layer.slot) {
-                                    layerConfig["slot"] = layer.slot;
-                                }
-
-                                if (layer.minzoom) {
-                                    layerConfig["minzoom"] = layer.minzoom;
-                                }
-
-                                if (layer.maxzoom) {
-                                    layerConfig["maxzoom"] = layer.maxzoom;
-                                }
-
-                                if (layer.filter) {
-                                    layerConfig["filter"] = layer.filter;
-                                }
-
-                                if (layer.before_id) {
-                                    map.addLayer(layerConfig, layer.before_id);
-                                } else {
-                                    map.addLayer(layerConfig);
-                                }
-
-                                // Add popups or tooltips if provided
-                                if (layer.popup) {
-                                    map.on("click", layer.id, function (e) {
-                                        const description =
-                                            e.features[0].properties[
-                                                layer.popup
-                                            ];
-
-                                        new maplibregl.Popup()
-                                            .setLngLat(e.lngLat)
-                                            .setHTML(description)
-                                            .addTo(map);
-                                    });
-
-                                    // Change cursor to pointer when hovering over the layer
-                                    map.on("mouseenter", layer.id, function () {
-                                        map.getCanvas().style.cursor =
-                                            "pointer";
-                                    });
-
-                                    // Change cursor back to default when leaving the layer
-                                    map.on("mouseleave", layer.id, function () {
-                                        map.getCanvas().style.cursor = "";
-                                    });
-                                }
-
-                                if (layer.tooltip) {
-                                    const tooltip = new maplibregl.Popup({
-                                        closeButton: false,
-                                        closeOnClick: false,
-                                    });
-
-                                    map.on("mousemove", layer.id, function (e) {
-                                        map.getCanvas().style.cursor =
-                                            "pointer";
-
-                                        if (e.features.length > 0) {
-                                            const description =
-                                                e.features[0].properties[
-                                                    layer.tooltip
-                                                ];
-                                            tooltip
-                                                .setLngLat(e.lngLat)
-                                                .setHTML(description)
-                                                .addTo(map);
-                                        } else {
-                                            tooltip.remove();
-                                        }
-                                    });
-
-                                    map.on("mouseleave", layer.id, function () {
-                                        map.getCanvas().style.cursor = "";
-                                        tooltip.remove();
-                                    });
-                                }
-
-                                // Add hover effect if provided
-                                if (layer.hover_options) {
-                                    const jsHoverOptions = {};
-                                    for (const [key, value] of Object.entries(
-                                        layer.hover_options,
-                                    )) {
-                                        const jsKey = key.replace(/_/g, "-");
-                                        jsHoverOptions[jsKey] = value;
-                                    }
-
-                                    let hoveredFeatureId = null;
-
-                                    map.on("mousemove", layer.id, function (e) {
-                                        if (e.features.length > 0) {
-                                            if (hoveredFeatureId !== null) {
-                                                map.setFeatureState(
-                                                    {
-                                                        source:
-                                                            typeof layer.source ===
-                                                            "string"
-                                                                ? layer.source
-                                                                : layer.id,
-                                                        id: hoveredFeatureId,
-                                                    },
-                                                    { hover: false },
-                                                );
-                                            }
-                                            hoveredFeatureId = e.features[0].id;
-                                            map.setFeatureState(
-                                                {
-                                                    source:
-                                                        typeof layer.source ===
-                                                        "string"
-                                                            ? layer.source
-                                                            : layer.id,
-                                                    id: hoveredFeatureId,
-                                                },
-                                                { hover: true },
-                                            );
-                                        }
-                                    });
-
-                                    map.on("mouseleave", layer.id, function () {
+                                map.on("mousemove", layer.id, function (e) {
+                                    if (e.features.length > 0) {
                                         if (hoveredFeatureId !== null) {
                                             map.setFeatureState(
                                                 {
@@ -368,44 +373,80 @@ HTMLWidgets.widget({
                                                 { hover: false },
                                             );
                                         }
-                                        hoveredFeatureId = null;
-                                    });
+                                        hoveredFeatureId = e.features[0].id;
+                                        map.setFeatureState(
+                                            {
+                                                source:
+                                                    typeof layer.source ===
+                                                    "string"
+                                                        ? layer.source
+                                                        : layer.id,
+                                                id: hoveredFeatureId,
+                                            },
+                                            { hover: true },
+                                        );
+                                    }
+                                });
 
-                                    Object.keys(jsHoverOptions).forEach(
-                                        function (key) {
-                                            const originalPaint =
-                                                map.getPaintProperty(
-                                                    layer.id,
-                                                    key,
-                                                ) || layer.paint[key];
-                                            map.setPaintProperty(
+                                map.on("mouseleave", layer.id, function () {
+                                    if (hoveredFeatureId !== null) {
+                                        map.setFeatureState(
+                                            {
+                                                source:
+                                                    typeof layer.source ===
+                                                    "string"
+                                                        ? layer.source
+                                                        : layer.id,
+                                                id: hoveredFeatureId,
+                                            },
+                                            { hover: false },
+                                        );
+                                    }
+                                    hoveredFeatureId = null;
+                                });
+
+                                Object.keys(jsHoverOptions).forEach(
+                                    function (key) {
+                                        const originalPaint =
+                                            map.getPaintProperty(
                                                 layer.id,
                                                 key,
-                                                [
-                                                    "case",
-                                                    [
-                                                        "boolean",
-                                                        [
-                                                            "feature-state",
-                                                            "hover",
-                                                        ],
-                                                        false,
-                                                    ],
-                                                    jsHoverOptions[key],
-                                                    originalPaint,
-                                                ],
-                                            );
-                                        },
-                                    );
-                                }
-                            } catch (e) {
-                                console.error(
-                                    "Failed to add layer: ",
-                                    layer,
-                                    e,
+                                            ) || layer.paint[key];
+                                        map.setPaintProperty(layer.id, key, [
+                                            "case",
+                                            [
+                                                "boolean",
+                                                ["feature-state", "hover"],
+                                                false,
+                                            ],
+                                            jsHoverOptions[key],
+                                            originalPaint,
+                                        ]);
+                                    },
+                                );
+                            }
+                        } catch (e) {
+                            console.error("Failed to add layer: ", layer, e);
+                        }
+                    }
+                    if (x.h3j_sources) {
+                        x.h3j_sources.forEach(async function (source) {
+                            await map.addH3JSource(source.id, {
+                                data: source.url,
+                            });
+
+                            // A bit hacky?
+                            if (x.layers) {
+                                x.layers.forEach((layer) =>
+                                    add_my_layers(layer),
                                 );
                             }
                         });
+                    }
+
+                    // Add layers if provided
+                    if (x.layers) {
+                        x.layers.forEach((layer) => add_my_layers(layer));
                     }
 
                     // Apply setFilter if provided
@@ -471,6 +512,19 @@ HTMLWidgets.widget({
                         );
                         map.addControl(globeMinimap, x.globe_minimap.position);
                         map.controls.push(globeMinimap);
+                    }
+
+                    if (x.setProjection) {
+                        x.setProjection.forEach(function (projectionConfig) {
+                            if (projectionConfig.projection) {
+                                const projection =
+                                    typeof projectionConfig.projection ===
+                                    "string"
+                                        ? { type: projectionConfig.projection }
+                                        : projectionConfig.projection;
+                                map.setProjection(projection);
+                            }
+                        });
                     }
 
                     // Add geocoder control if enabled
@@ -673,6 +727,48 @@ HTMLWidgets.widget({
                         });
                         map.addControl(geolocate, x.geolocate_control.position);
                         map.controls.push(geolocate);
+
+                        if (HTMLWidgets.shinyMode) {
+                            geolocate.on("geolocate", function (event) {
+                                Shiny.setInputValue(el.id + "_geolocate", {
+                                    coords: event.coords,
+                                    time: new Date(),
+                                });
+                            });
+
+                            geolocate.on("trackuserlocationstart", function () {
+                                Shiny.setInputValue(
+                                    el.id + "_geolocate_tracking",
+                                    {
+                                        status: "start",
+                                        time: new Date(),
+                                    },
+                                );
+                            });
+
+                            geolocate.on("trackuserlocationend", function () {
+                                Shiny.setInputValue(
+                                    el.id + "_geolocate_tracking",
+                                    {
+                                        status: "end",
+                                        time: new Date(),
+                                    },
+                                );
+                            });
+
+                            geolocate.on("error", function (error) {
+                                if (error.error.code === 1) {
+                                    Shiny.setInputValue(
+                                        el.id + "_geolocate_error",
+                                        {
+                                            message:
+                                                "Location permission denied",
+                                            time: new Date(),
+                                        },
+                                    );
+                                }
+                            });
+                        }
                     }
 
                     // Add navigation control if enabled
@@ -802,9 +898,59 @@ HTMLWidgets.widget({
                             ? "layers-control collapsible"
                             : "layers-control";
                         layersControl.style.position = "absolute";
-                        layersControl.style[
-                            x.layers_control.position || "top-right"
-                        ] = "10px";
+
+                        // Set the position correctly - fix position bug by using correct CSS positioning
+                        const position =
+                            x.layers_control.position || "top-left";
+                        if (position === "top-left") {
+                            layersControl.style.top = "10px";
+                            layersControl.style.left = "10px";
+                        } else if (position === "top-right") {
+                            layersControl.style.top = "10px";
+                            layersControl.style.right = "10px";
+                        } else if (position === "bottom-left") {
+                            layersControl.style.bottom = "10px";
+                            layersControl.style.left = "10px";
+                        } else if (position === "bottom-right") {
+                            layersControl.style.bottom = "40px";
+                            layersControl.style.right = "10px";
+                        }
+
+                        // Apply custom colors if provided
+                        if (x.layers_control.custom_colors) {
+                            const colors = x.layers_control.custom_colors;
+
+                            // Create a style element for custom colors
+                            const styleEl = document.createElement("style");
+                            let css = "";
+
+                            if (colors.background) {
+                                css += `#${x.layers_control.control_id} { background-color: ${colors.background}; }\n`;
+                            }
+
+                            if (colors.text) {
+                                css += `#${x.layers_control.control_id} a { color: ${colors.text}; }\n`;
+                            }
+
+                            if (colors.active) {
+                                css += `#${x.layers_control.control_id} a.active { background-color: ${colors.active}; }\n`;
+                                css += `#${x.layers_control.control_id} .toggle-button { background-color: ${colors.active}; }\n`;
+                            }
+
+                            if (colors.activeText) {
+                                css += `#${x.layers_control.control_id} a.active { color: ${colors.activeText}; }\n`;
+                                css += `#${x.layers_control.control_id} .toggle-button { color: ${colors.activeText}; }\n`;
+                            }
+
+                            if (colors.hover) {
+                                css += `#${x.layers_control.control_id} a:hover { background-color: ${colors.hover}; }\n`;
+                                css += `#${x.layers_control.control_id} .toggle-button:hover { background-color: ${colors.hover}; }\n`;
+                            }
+
+                            styleEl.textContent = css;
+                            document.head.appendChild(styleEl);
+                        }
+
                         el.appendChild(layersControl);
 
                         const layersList = document.createElement("div");
@@ -826,7 +972,25 @@ HTMLWidgets.widget({
                             link.id = layerId;
                             link.href = "#";
                             link.textContent = layerId;
-                            link.className = "active";
+
+                            // Check if the layer visibility is set to "none" initially
+                            const initialVisibility = map.getLayoutProperty(
+                                layerId,
+                                "visibility",
+                            );
+                            link.className =
+                                initialVisibility === "none" ? "" : "active";
+
+                            // Also hide any associated legends if the layer is initially hidden
+                            if (initialVisibility === "none") {
+                                const associatedLegends =
+                                    document.querySelectorAll(
+                                        `.mapboxgl-legend[data-layer-id="${layerId}"]`,
+                                    );
+                                associatedLegends.forEach((legend) => {
+                                    legend.style.display = "none";
+                                });
+                            }
 
                             // Show or hide layer when the toggle is clicked
                             link.onclick = function (e) {
@@ -847,6 +1011,15 @@ HTMLWidgets.widget({
                                         "none",
                                     );
                                     this.className = "";
+
+                                    // Hide associated legends
+                                    const associatedLegends =
+                                        document.querySelectorAll(
+                                            `.mapboxgl-legend[data-layer-id="${clickedLayer}"]`,
+                                        );
+                                    associatedLegends.forEach((legend) => {
+                                        legend.style.display = "none";
+                                    });
                                 } else {
                                     this.className = "active";
                                     map.setLayoutProperty(
@@ -854,6 +1027,15 @@ HTMLWidgets.widget({
                                         "visibility",
                                         "visible",
                                     );
+
+                                    // Show associated legends
+                                    const associatedLegends =
+                                        document.querySelectorAll(
+                                            `.mapboxgl-legend[data-layer-id="${clickedLayer}"]`,
+                                        );
+                                    associatedLegends.forEach((legend) => {
+                                        legend.style.display = "";
+                                    });
                                 }
                             };
 
@@ -864,7 +1046,25 @@ HTMLWidgets.widget({
                         if (x.layers_control.collapsible) {
                             const toggleButton = document.createElement("div");
                             toggleButton.className = "toggle-button";
-                            toggleButton.textContent = "Layers";
+
+                            // Use stacked layers icon instead of text if requested
+                            if (x.layers_control.use_icon) {
+                                // Add icon-only class to the control for compact styling
+                                layersControl.classList.add("icon-only");
+
+                                // More GIS-like layers stack icon
+                                toggleButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                                    <polyline points="2 17 12 22 22 17"></polyline>
+                                    <polyline points="2 12 12 17 22 12"></polyline>
+                                </svg>`;
+                                toggleButton.style.display = "flex";
+                                toggleButton.style.alignItems = "center";
+                                toggleButton.style.justifyContent = "center";
+                            } else {
+                                toggleButton.textContent = "Layers";
+                            }
+
                             toggleButton.onclick = function () {
                                 layersControl.classList.toggle("open");
                             };
@@ -1011,27 +1211,36 @@ if (HTMLWidgets.shinyMode) {
                             closeOnClick: false,
                         });
 
-                        map.on("mousemove", message.layer.id, function (e) {
-                            map.getCanvas().style.cursor = "pointer";
+                        // Define named handler functions:
+                        const mouseMoveHandler = function (e) {
+                            onMouseMoveTooltip(
+                                e,
+                                map,
+                                tooltip,
+                                message.layer.tooltip,
+                            );
+                        };
 
-                            if (e.features.length > 0) {
-                                const description =
-                                    e.features[0].properties[
-                                        message.layer.tooltip
-                                    ];
-                                tooltip
-                                    .setLngLat(e.lngLat)
-                                    .setHTML(description)
-                                    .addTo(map);
-                            } else {
-                                tooltip.remove();
-                            }
-                        });
+                        const mouseLeaveHandler = function () {
+                            onMouseLeaveTooltip(map, tooltip);
+                        };
 
-                        map.on("mouseleave", message.layer.id, function () {
-                            map.getCanvas().style.cursor = "";
-                            tooltip.remove();
-                        });
+                        // Attach handlers by reference:
+                        map.on("mousemove", message.layer.id, mouseMoveHandler);
+                        map.on(
+                            "mouseleave",
+                            message.layer.id,
+                            mouseLeaveHandler,
+                        );
+
+                        // Store these handler references for later removal:
+                        if (!window._mapboxHandlers) {
+                            window._mapboxHandlers = {};
+                        }
+                        window._mapboxHandlers[message.layer.id] = {
+                            mousemove: mouseMoveHandler,
+                            mouseleave: mouseLeaveHandler,
+                        };
                     }
 
                     // Add hover effect if provided
@@ -1113,7 +1322,35 @@ if (HTMLWidgets.shinyMode) {
                     );
                 }
             } else if (message.type === "remove_layer") {
+                // If there's an active tooltip, remove it first
+                if (window._activeTooltip) {
+                    window._activeTooltip.remove();
+                    delete window._activeTooltip;
+                }
                 if (map.getLayer(message.layer)) {
+                    // Check if we have stored handlers for this layer
+                    if (
+                        window._mapboxHandlers &&
+                        window._mapboxHandlers[message.layer]
+                    ) {
+                        const handlers = window._mapboxHandlers[message.layer];
+                        if (handlers.mousemove) {
+                            map.off(
+                                "mousemove",
+                                message.layer,
+                                handlers.mousemove,
+                            );
+                        }
+                        if (handlers.mouseleave) {
+                            map.off(
+                                "mouseleave",
+                                message.layer,
+                                handlers.mouseleave,
+                            );
+                        }
+                        // Clean up the reference
+                        delete window._mapboxHandlers[message.layer];
+                    }
                     map.removeLayer(message.layer);
                 }
                 if (map.getSource(message.layer)) {
@@ -1442,6 +1679,38 @@ if (HTMLWidgets.shinyMode) {
                 });
                 map.addControl(geolocate, message.options.position);
                 map.controls.push(geolocate);
+
+                if (HTMLWidgets.shinyMode) {
+                    geolocate.on("geolocate", function (event) {
+                        Shiny.setInputValue(el.id + "_geolocate", {
+                            coords: event.coords,
+                            time: new Date(),
+                        });
+                    });
+
+                    geolocate.on("trackuserlocationstart", function () {
+                        Shiny.setInputValue(el.id + "_geolocate_tracking", {
+                            status: "start",
+                            time: new Date(),
+                        });
+                    });
+
+                    geolocate.on("trackuserlocationend", function () {
+                        Shiny.setInputValue(el.id + "_geolocate_tracking", {
+                            status: "end",
+                            time: new Date(),
+                        });
+                    });
+
+                    geolocate.on("error", function (error) {
+                        if (error.error.code === 1) {
+                            Shiny.setInputValue(el.id + "_geolocate_error", {
+                                message: "Location permission denied",
+                                time: new Date(),
+                            });
+                        }
+                    });
+                }
             } else if (message.type === "add_geocoder_control") {
                 const geocoderApi = {
                     forwardGeocode: async (config) => {
@@ -1508,7 +1777,57 @@ if (HTMLWidgets.shinyMode) {
                     ? "layers-control collapsible"
                     : "layers-control";
                 layersControl.style.position = "absolute";
-                layersControl.style[message.position || "top-right"] = "10px";
+
+                // Set the position correctly
+                const position = message.position || "top-left";
+                if (position === "top-left") {
+                    layersControl.style.top = "10px";
+                    layersControl.style.left = "10px";
+                } else if (position === "top-right") {
+                    layersControl.style.top = "10px";
+                    layersControl.style.right = "10px";
+                } else if (position === "bottom-left") {
+                    layersControl.style.bottom = "10px";
+                    layersControl.style.left = "10px";
+                } else if (position === "bottom-right") {
+                    layersControl.style.bottom = "40px";
+                    layersControl.style.right = "10px";
+                }
+
+                // Apply custom colors if provided
+                if (message.custom_colors) {
+                    const colors = message.custom_colors;
+
+                    // Create a style element for custom colors
+                    const styleEl = document.createElement("style");
+                    let css = "";
+
+                    if (colors.background) {
+                        css += `#${message.control_id} { background-color: ${colors.background}; }\n`;
+                    }
+
+                    if (colors.text) {
+                        css += `#${message.control_id} a { color: ${colors.text}; }\n`;
+                    }
+
+                    if (colors.active) {
+                        css += `#${message.control_id} a.active { background-color: ${colors.active}; }\n`;
+                        css += `#${message.control_id} .toggle-button { background-color: ${colors.active}; }\n`;
+                    }
+
+                    if (colors.activeText) {
+                        css += `#${message.control_id} a.active { color: ${colors.activeText}; }\n`;
+                        css += `#${message.control_id} .toggle-button { color: ${colors.activeText}; }\n`;
+                    }
+
+                    if (colors.hover) {
+                        css += `#${message.control_id} a:hover { background-color: ${colors.hover}; }\n`;
+                        css += `#${message.control_id} .toggle-button:hover { background-color: ${colors.hover}; }\n`;
+                    }
+
+                    styleEl.textContent = css;
+                    document.head.appendChild(styleEl);
+                }
 
                 const layersList = document.createElement("div");
                 layersList.className = "layers-list";
@@ -1526,7 +1845,24 @@ if (HTMLWidgets.shinyMode) {
                     link.id = layerId;
                     link.href = "#";
                     link.textContent = layerId;
-                    link.className = "active";
+
+                    // Check if the layer visibility is set to "none" initially
+                    const initialVisibility = map.getLayoutProperty(
+                        layerId,
+                        "visibility",
+                    );
+                    link.className =
+                        initialVisibility === "none" ? "" : "active";
+
+                    // Also hide any associated legends if the layer is initially hidden
+                    if (initialVisibility === "none") {
+                        const associatedLegends = document.querySelectorAll(
+                            `.mapboxgl-legend[data-layer-id="${layerId}"]`,
+                        );
+                        associatedLegends.forEach((legend) => {
+                            legend.style.display = "none";
+                        });
+                    }
 
                     link.onclick = function (e) {
                         const clickedLayer = this.textContent;
@@ -1545,6 +1881,14 @@ if (HTMLWidgets.shinyMode) {
                                 "none",
                             );
                             this.className = "";
+
+                            // Hide associated legends
+                            const associatedLegends = document.querySelectorAll(
+                                `.mapboxgl-legend[data-layer-id="${clickedLayer}"]`,
+                            );
+                            associatedLegends.forEach((legend) => {
+                                legend.style.display = "none";
+                            });
                         } else {
                             this.className = "active";
                             map.setLayoutProperty(
@@ -1552,6 +1896,14 @@ if (HTMLWidgets.shinyMode) {
                                 "visibility",
                                 "visible",
                             );
+
+                            // Show associated legends
+                            const associatedLegends = document.querySelectorAll(
+                                `.mapboxgl-legend[data-layer-id="${clickedLayer}"]`,
+                            );
+                            associatedLegends.forEach((legend) => {
+                                legend.style.display = "";
+                            });
                         }
                     };
 
@@ -1561,7 +1913,25 @@ if (HTMLWidgets.shinyMode) {
                 if (message.collapsible) {
                     const toggleButton = document.createElement("div");
                     toggleButton.className = "toggle-button";
-                    toggleButton.textContent = "Layers";
+
+                    // Use stacked layers icon instead of text if requested
+                    if (message.use_icon) {
+                        // Add icon-only class to the control for compact styling
+                        layersControl.classList.add("icon-only");
+
+                        // More GIS-like layers stack icon
+                        toggleButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                            <polyline points="2 17 12 22 22 17"></polyline>
+                            <polyline points="2 12 12 17 22 12"></polyline>
+                        </svg>`;
+                        toggleButton.style.display = "flex";
+                        toggleButton.style.alignItems = "center";
+                        toggleButton.style.justifyContent = "center";
+                    } else {
+                        toggleButton.textContent = "Layers";
+                    }
+
                     toggleButton.onclick = function () {
                         layersControl.classList.toggle("open");
                     };
@@ -1613,6 +1983,14 @@ if (HTMLWidgets.shinyMode) {
                 if (layersControl) {
                     layersControl.remove();
                 }
+
+                // Remove globe minimap if it exists
+                const globeMinimap = document.querySelector(
+                    ".mapboxgl-ctrl-globe-minimap",
+                );
+                if (globeMinimap) {
+                    globeMinimap.remove();
+                }
             } else if (message.type === "move_layer") {
                 if (map.getLayer(message.layer)) {
                     if (message.before) {
@@ -1657,7 +2035,101 @@ if (HTMLWidgets.shinyMode) {
                 } else {
                     console.error("Invalid image data:", message);
                 }
+            } else if (message.type === "set_tooltip") {
+                const layerId = message.layer;
+                const newTooltipProperty = message.tooltip;
+
+                // If there's an active tooltip open, remove it first
+                if (window._activeTooltip) {
+                    window._activeTooltip.remove();
+                    delete window._activeTooltip;
+                }
+
+                // Remove old handlers if any
+                if (window._mapboxHandlers && window._mapboxHandlers[layerId]) {
+                    const handlers = window._mapboxHandlers[layerId];
+                    if (handlers.mousemove) {
+                        map.off("mousemove", layerId, handlers.mousemove);
+                    }
+                    if (handlers.mouseleave) {
+                        map.off("mouseleave", layerId, handlers.mouseleave);
+                    }
+                    delete window._mapboxHandlers[layerId];
+                }
+
+                // Create a new tooltip popup
+                const tooltip = new maplibregl.Popup({
+                    closeButton: false,
+                    closeOnClick: false,
+                });
+
+                // Define new handlers referencing the updated tooltip property
+                const mouseMoveHandler = function (e) {
+                    onMouseMoveTooltip(e, map, tooltip, newTooltipProperty);
+                };
+                const mouseLeaveHandler = function () {
+                    onMouseLeaveTooltip(map, tooltip);
+                };
+
+                // Add the new event handlers
+                map.on("mousemove", layerId, mouseMoveHandler);
+                map.on("mouseleave", layerId, mouseLeaveHandler);
+
+                // Store these handlers so we can remove/update them in the future
+                if (!window._mapboxHandlers) {
+                    window._mapboxHandlers = {};
+                }
+                window._mapboxHandlers[layerId] = {
+                    mousemove: mouseMoveHandler,
+                    mouseleave: mouseLeaveHandler,
+                };
+            } else if (message.type === "set_source") {
+                const layerId = message.layer;
+                const newData = message.source;
+                const layerObject = map.getLayer(layerId);
+
+                if (!layerObject) {
+                    console.error("Layer not found: ", layerId);
+                    return;
+                }
+
+                const sourceId = layerObject.source;
+                const sourceObject = map.getSource(sourceId);
+
+                if (!sourceObject) {
+                    console.error("Source not found: ", sourceId);
+                    return;
+                }
+
+                // Update the geojson data
+                sourceObject.setData(newData);
             }
+        } else if (message.type === "set_projection") {
+            if (map.loaded()) {
+                const projection =
+                    typeof message.projection === "string"
+                        ? { type: message.projection }
+                        : message.projection;
+
+                try {
+                    map.setProjection(projection);
+                } catch (e) {
+                    console.error("Failed to set projection:", e);
+                }
+            } else {
+                console.error("Map not loaded yet");
+            }
+        } else if (message.type === "add_globe_minimap") {
+            const globeMinimapOptions = {
+                globeSize: message.options.globe_size || 100,
+                landColor: message.options.land_color || "#404040",
+                waterColor: message.options.water_color || "#090909",
+                markerColor: message.options.marker_color || "#1da1f2",
+                markerSize: message.options.marker_size || 2,
+            };
+            const globeMinimap = new GlobeMinimap(globeMinimapOptions);
+            map.addControl(globeMinimap, message.position || "bottom-left");
+            map.controls.push(globeMinimap);
         }
     });
 }
